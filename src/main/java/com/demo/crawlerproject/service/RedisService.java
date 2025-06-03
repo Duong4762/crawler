@@ -1,6 +1,9 @@
 package com.demo.crawlerproject.service;
 
+import com.demo.crawlerproject.config.SelectorConfig;
 import com.demo.crawlerproject.url.Url;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
@@ -17,6 +20,8 @@ import java.util.Set;
 @Service
 @Slf4j
 public class RedisService {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Autowired
     private RedisTemplate<String, String> redisTemplate;
@@ -99,6 +104,32 @@ public class RedisService {
 
     public String getRobotsTxt(String key) {
         return redisTemplate.opsForValue().get(key);
+    }
+
+    public void addRetryUrl(String url) {
+        redisTemplate.opsForSet().add("retry", url);
+    }
+
+    //method relate to selector config
+    public void saveSelectorConfig(String domain, SelectorConfig config) {
+        try {
+            String json = objectMapper.writeValueAsString(config);
+            redisTemplate.opsForValue().set("selector:" + domain, json);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize selector config for domain {}", domain, e);
+        }
+    }
+
+    public SelectorConfig getSelectorConfig(String domain) {
+        String json = redisTemplate.opsForValue().get("selector:" + domain);
+        if (json == null) return null;
+
+        try {
+            return objectMapper.readValue(json, SelectorConfig.class);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to deserialize selector config for domain {}", domain, e);
+            return null;
+        }
     }
 
 }

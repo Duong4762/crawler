@@ -1,16 +1,19 @@
 package com.demo.crawlerproject.fetcher;
 
 import com.demo.crawlerproject.config.CrawlerConfig;
+import com.demo.crawlerproject.service.RedisService;
 import lombok.extern.slf4j.Slf4j;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
+import okhttp3.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
 public class Fetcher {
+
+    @Autowired
+    private RedisService redisService;
+
     private final OkHttpClient client;
     private long lastFetchTime = 0L;
     private final Object mutex = new Object();
@@ -40,7 +43,14 @@ public class Fetcher {
 
         try (Response response = client.newCall(request).execute()) {
             if (!response.isSuccessful()) {
-                throw new Exception("Fetch failed: HTTP " + response.code());
+                int code = response.code();
+                if (code >= 500 && code < 600) {
+                    log.warn("Server error {}, add url to retry queue", code);
+                    redisService.addRetryUrl(url);
+                    throw new Exception("Server error " + code);
+                } else {
+                    throw new Exception("Fetch failed: HTTP " + code);
+                }
             }
 
             ResponseBody body = response.body();
@@ -49,6 +59,10 @@ public class Fetcher {
             }
             log.info("Fetched {} completely", url);
             return body.string();
+        } catch (java.net.SocketTimeoutException | java.net.ConnectException e) {
+            log.warn("Temporary network error ({}), add url to retry queue", e.getClass().getSimpleName());
+            redisService.addRetryUrl(url);
+            throw e;
         } catch (Exception e) {
             throw e;
         }
