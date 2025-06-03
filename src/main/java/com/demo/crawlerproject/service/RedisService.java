@@ -4,10 +4,6 @@ import com.demo.crawlerproject.config.SelectorConfig;
 import com.demo.crawlerproject.url.Url;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.micrometer.core.instrument.Gauge;
-import io.micrometer.core.instrument.MeterRegistry;
-import jakarta.annotation.PostConstruct;
-import lombok.Getter;
 import lombok.Synchronized;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,35 +22,8 @@ public class RedisService {
     @Autowired
     private RedisTemplate<String, String> redisTemplate;
 
-    @Autowired
-    private MeterRegistry meterRegistry;
-
-    // Getter cho Micrometer gauge
-    @Getter
-    private volatile double crawledSize = 0;
-    @Getter
-    private volatile double processingSize = 0;
-    @Getter
-    private volatile double taskQueueSize = 0;
-
-    @PostConstruct
-    public void init() {
-        Gauge.builder("crawler_crawled_set_size", this, RedisService::getCrawledSize)
-                .description("Size of crawled URLs set in Redis")
-                .register(meterRegistry);
-
-        Gauge.builder("crawler_processing_set_size", this, RedisService::getProcessingSize)
-                .description("Size of processing URLs set in Redis")
-                .register(meterRegistry);
-
-        Gauge.builder("crawler_task_queue_size", this, RedisService::getTaskQueueSize)
-                .description("Size of task queue in Redis")
-                .register(meterRegistry);
-    }
-
     public void addCrawledUrl(String url) {
         redisTemplate.opsForSet().add("crawled", url);
-        crawledSize = redisTemplate.opsForSet().size("crawled");
     }
 
     public boolean isUrlCrawled(String url) {
@@ -64,12 +33,10 @@ public class RedisService {
 
     public void addProcessingUrl(String url) {
         redisTemplate.opsForSet().add("processing", url);
-        processingSize = redisTemplate.opsForSet().size("processing");
     }
 
     public void removeProcessingUrl(String url) {
         redisTemplate.opsForSet().remove("processing", url);
-        processingSize = redisTemplate.opsForSet().size("processing");
     }
 
     public boolean isUrlProcessing(String url) {
@@ -79,7 +46,6 @@ public class RedisService {
 
     public void addTaskUrl(Url url) {
         redisTemplate.opsForZSet().add("task-queue", url.getUrl(), url.getDepth());
-        taskQueueSize = redisTemplate.opsForZSet().size("task-queue");
     }
 
     @Synchronized
@@ -91,7 +57,6 @@ public class RedisService {
             String url = tuple.getValue();
             Double score = tuple.getScore();
             redisTemplate.opsForZSet().remove("task-queue", url);
-            taskQueueSize = redisTemplate.opsForZSet().size("task-queue");
             return new Url(url, score);
         }
         return null;
@@ -108,6 +73,22 @@ public class RedisService {
 
     public void addRetryUrl(String url) {
         redisTemplate.opsForSet().add("retry", url);
+    }
+
+    //method relate to monitor
+    public Long getNumberOfCrawledUrl(){
+        Long size = redisTemplate.opsForSet().size("crawled");
+        return size != null ? size : 0L;
+    }
+
+    public Long getNumberOfProcessingUrl(){
+        Long size = redisTemplate.opsForSet().size("processing");
+        return size != null ? size : 0L;
+    }
+
+    public Long getNumberOfTaskUrl(){
+        Long size = redisTemplate.opsForZSet().size("task-queue");
+        return size != null ? size : 0L;
     }
 
     //method relate to selector config

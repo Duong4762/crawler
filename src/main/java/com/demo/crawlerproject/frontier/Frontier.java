@@ -1,6 +1,7 @@
 package com.demo.crawlerproject.frontier;
 
 import com.demo.crawlerproject.config.CrawlerConfig;
+import com.demo.crawlerproject.monitor.Monitor;
 import com.demo.crawlerproject.service.RedisService;
 import com.demo.crawlerproject.url.Url;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +17,8 @@ import java.util.Set;
 public class Frontier {
     @Autowired
     private RedisService redisService;
+    @Autowired
+    private Monitor monitor;
 
     @Scheduled(fixedRate = 15 * 60 * 1000)
     public void enqueueSeedUrls() {
@@ -23,6 +26,7 @@ public class Frontier {
         for (String url : seedUrls) {
             Url seed = new Url(url, 0);
             redisService.addTaskUrl(seed);
+            monitor.incrementTask();
         }
         log.info("Add seed urls");
     }

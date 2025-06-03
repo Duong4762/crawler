@@ -3,6 +3,7 @@ package com.demo.crawlerproject.crawler;
 import com.demo.crawlerproject.config.CrawlerConfig;
 import com.demo.crawlerproject.fetcher.Fetcher;
 import com.demo.crawlerproject.frontier.Frontier;
+import com.demo.crawlerproject.monitor.Monitor;
 import com.demo.crawlerproject.parser.ParseData;
 import com.demo.crawlerproject.parser.Parser;
 import com.demo.crawlerproject.service.RedisService;
@@ -41,6 +42,8 @@ public class Crawler implements Runnable {
     private StoreService storeService;
     @Autowired
     private RedisService redisService;
+    @Autowired
+    private Monitor monitor;
 
     @Override
     public void run() {
@@ -54,31 +57,38 @@ public class Crawler implements Runnable {
                     log.error("Error occurred: ", e);
                 }
             } else {
+                monitor.decrementTask();
                 frontier.addProcessingUrl(url.getUrl());
-                try {
-                    if(!robotstxtService.allows(url.getUrl(), CrawlerConfig.userAgent)){
-                        log.info("Skipped url because robotstxt is not allowed");
-                        continue;
-                    }
-                    String pageContent = fetcher.fetch(url.getUrl());
-                    if (url.getDepth() < CrawlerConfig.maxDepth){
-                        Set<String> urlExtracted = urlExtractor.extractUrls(pageContent);
-                        Set<String> normalizedUrls = urlExtracted.stream()
-                                .map(u -> UrlCanonicalizer.normalizeUrl(u, url.getUrl()))
-                                .collect(Collectors.toSet());
-                        Set<String> newUrls = urlFilter.filter(normalizedUrls);
-                        for (String newUrl : newUrls) {
-                            frontier.addTaskUrl(new Url(newUrl, url.getDepth() + 1));
+                monitor.incrementProcessing();
+                monitor.recordCrawlDuration(()->{
+                    try {
+                        if (!robotstxtService.allows(url.getUrl(), CrawlerConfig.userAgent)) {
+                            log.info("Skipped url because robotstxt is not allowed");
+                            return;
                         }
+                        String pageContent = fetcher.fetch(url.getUrl());
+                        if (url.getDepth() < CrawlerConfig.maxDepth) {
+                            Set<String> urlExtracted = urlExtractor.extractUrls(pageContent);
+                            Set<String> normalizedUrls = urlExtracted.stream()
+                                    .map(u -> UrlCanonicalizer.normalizeUrl(u, url.getUrl()))
+                                    .collect(Collectors.toSet());
+                            Set<String> newUrls = urlFilter.filter(normalizedUrls);
+                            for (String newUrl : newUrls) {
+                                frontier.addTaskUrl(new Url(newUrl, url.getDepth() + 1));
+                                monitor.incrementTask();
+                            }
+                        }
+                        ParseData article = parser.parse(pageContent, url.getUrl());
+                        storeService.saveArticle(article);
+                        redisService.addCrawledUrl(url.getUrl());
+                        monitor.incrementCrawled();
+                    } catch (Exception e) {
+                        log.error("Error occurred: ", e);
+                    } finally {
+                        redisService.removeProcessingUrl(url.getUrl());
+                        monitor.decrementProcessing();
                     }
-                    ParseData article = parser.parse(pageContent, url.getUrl());
-                    storeService.saveArticle(article);
-                    redisService.addCrawledUrl(url.getUrl());
-                } catch (Exception e){
-                    log.error("Error occurred: ", e);
-                } finally {
-                    redisService.removeProcessingUrl(url.getUrl());
-                }
+                });
             }
         }
     }

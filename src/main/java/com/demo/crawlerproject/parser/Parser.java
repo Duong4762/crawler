@@ -11,11 +11,16 @@ import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @Slf4j
 public class Parser {
+
+    private final Map<String, Object> lockMap = new ConcurrentHashMap<>();
 
     @Autowired
     private RedisService redisService;
@@ -26,41 +31,40 @@ public class Parser {
     public ParseData parse(String html, String url) throws Exception {
         try {
             Document doc = Jsoup.parse(html);
+            String domain = extractDomain(url);
 
             if (looksLikeArticle(doc)) {
-                SelectorConfig config = redisService.getSelectorConfig("vnexpress.net");
+                SelectorConfig config = redisService.getSelectorConfig(domain);
 
                 if (config == null) {
-                    synchronized (this) {
-                        config = redisService.getSelectorConfig("vnexpress.net");
+                    synchronized (getLock(domain)) {
+                        config = redisService.getSelectorConfig(domain);
                         if (config == null) {
                             config = llmService.generateSelectorConfig(cleanHtmlForLlm(doc));
-                            redisService.saveSelectorConfig("vnexpress.net", config);
+                            redisService.saveSelectorConfig(domain, config);
                         }
                     }
                 }
 
-                ParseData article = new ParseData();
-                Element titleElement = doc.selectFirst(config.getTitle());
-                if (titleElement != null) {
-                    article.setTitle(titleElement.text());
-                }
+                ParseData article = parseDoc(doc, url, config);
 
-                Element timeElement = doc.selectFirst(config.getPublishTime());
-                if (timeElement != null) {
-                    article.setPublishTime(timeElement.text());
-                }
-
-                Elements paragraphs = doc.select(config.getContent());
-                StringBuilder contentBuilder = new StringBuilder();
-                for (Element p : paragraphs) {
-                    contentBuilder.append(p.text()).append("\n");
-                }
-                article.setContent(contentBuilder.toString().trim());
-                article.setUrl(url);
                 log.info("Parsed article: " + article);
                 if (article.getTitle() == null || article.getPublishTime() == null || article.getContent() == null) {
-                    throw new Exception("Article information is empty");
+                    log.info("Selector config has changed, need to re-call LLM");
+
+                    synchronized (getLock(domain)) {
+                        config = redisService.getSelectorConfig(domain);
+
+                        ParseData testArticle = parseDoc(doc, url, config);
+
+                        if (testArticle.getTitle() == null || testArticle.getPublishTime() == null || testArticle.getContent() == null) {
+                            config = llmService.generateSelectorConfig(cleanHtmlForLlm(doc));
+                            redisService.saveSelectorConfig(domain, config);
+                            article = parseDoc(doc, url, config);
+                        } else {
+                            article = testArticle;
+                        }
+                    }
                 }
                 return article;
             } else {
@@ -83,5 +87,40 @@ public class Parser {
                 .map(e -> e.attr("content")).orElse("").toLowerCase();
 
         return "article".equals(ogType) || (ogType.isEmpty());
+    }
+
+    private ParseData parseDoc(Document doc, String url, SelectorConfig config) {
+        ParseData article = new ParseData();
+        Element titleElement = doc.selectFirst(config.getTitle());
+        if (titleElement != null) {
+            article.setTitle(titleElement.text());
+        }
+
+        Element timeElement = doc.selectFirst(config.getPublishTime());
+        if (timeElement != null) {
+            article.setPublishTime(timeElement.text());
+        }
+
+        Elements paragraphs = doc.select(config.getContent());
+        StringBuilder contentBuilder = new StringBuilder();
+        for (Element p : paragraphs) {
+            contentBuilder.append(p.text()).append("\n");
+        }
+        article.setContent(contentBuilder.toString().trim());
+        article.setUrl(url);
+        return article;
+    }
+
+    private Object getLock(String domain) {
+        return lockMap.computeIfAbsent(domain, k -> new Object());
+    }
+
+    private String extractDomain(String url) throws Exception {
+        URI uri = new URI(url);
+        String host = uri.getHost();
+        if (host == null) {
+            throw new IllegalArgumentException("Invalid URL: " + url);
+        }
+        return host.startsWith("www.") ? host.substring(4) : host;
     }
 }
