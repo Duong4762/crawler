@@ -103,7 +103,7 @@ public class RedisService {
 
     public SelectorConfig getSelectorConfig(String domain) {
         String json = redisTemplate.opsForValue().get("selector:" + domain);
-        if (json == null) return null;
+        if (json == null || json.equals("null")) return null;
 
         try {
             return objectMapper.readValue(json, SelectorConfig.class);

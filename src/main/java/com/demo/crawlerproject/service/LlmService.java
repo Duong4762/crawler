@@ -9,8 +9,6 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 @Slf4j
@@ -18,22 +16,26 @@ public class LlmService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private static final String API_URL = "https://openrouter.ai/api/v1/chat/completions";
-    private static final String API_KEY = "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";
+    private static final String API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+    private static final String API_KEY = "AIzaSyDfVpFMY4MsnPtOTbyM91eHhoxHkWKrNMw"; // Thay bằng API key thật
+
     private final OkHttpClient httpClient = new OkHttpClient.Builder()
-            .callTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(1, TimeUnit.MINUTES)
+            .readTimeout(1, TimeUnit.MINUTES)
+            .writeTimeout(1, TimeUnit.MINUTES)
+            .callTimeout(1, TimeUnit.MINUTES)
             .build();
 
     public SelectorConfig generateSelectorConfig(String html) {
-        log.info("Generate selector config");
+        log.info("Generate selector config using Gemini");
         String prompt = buildPrompt(html);
         try {
-            String responseText = callLLMApi(prompt);
+            String responseText = callGeminiApi(prompt);
             String jsonOnly = extractJsonBlock(responseText);
-            log.info("Result from AI: {}", jsonOnly);
+            log.info("Result from Gemini: {}", jsonOnly);
             return objectMapper.readValue(jsonOnly, SelectorConfig.class);
         } catch (Exception e) {
-            log.error("Failed to get selector config from LLM", e);
+            log.error("Failed to get selector config from Gemini", e);
             return null;
         }
     }
@@ -50,82 +52,80 @@ public class LlmService {
                 "HTML:\n" + html;
     }
 
-    private String callLLMApi(String prompt) throws IOException {
-        String jsonBody = objectMapper.writeValueAsString(new ChatRequest(prompt));
+    private String callGeminiApi(String prompt) throws IOException {
+        String fullUrl = API_URL + "?key=" + API_KEY;
 
-        RequestBody body = RequestBody.create(
-                jsonBody,
-                MediaType.parse("application/json")
-        );
+        // Xây dựng payload theo yêu cầu của Gemini API
+        String payloadJson = objectMapper.writeValueAsString(new GeminiRequest(prompt));
+
+        RequestBody body = RequestBody.create(payloadJson, MediaType.parse("application/json"));
 
         Request request = new Request.Builder()
-                .url(API_URL)
-                .addHeader("Authorization", "Bearer " + API_KEY)
+                .url(fullUrl)
                 .addHeader("Content-Type", "application/json")
                 .post(body)
                 .build();
 
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw new IOException("Unexpected code " + response);
-            }
-            String responseBody = response.body().string();
+        long start = System.currentTimeMillis();
 
+        try (Response response = httpClient.newCall(request).execute()) {
+            long duration = System.currentTimeMillis() - start;
+            log.info("Gemini API call took {} ms", duration);
+
+            if (!response.isSuccessful()) {
+                throw new IOException("Gemini API failed: " + response.code() + " " + response.message());
+            }
+
+            String responseBody = response.body().string();
             JsonNode root = objectMapper.readTree(responseBody);
-            return root.at("/choices/0/message/content").asText();
+            return root.at("/candidates/0/content/parts/0/text").asText();
         }
     }
 
     private String extractJsonBlock(String text) {
         int start = text.indexOf('{');
         if (start == -1) {
-            throw new IllegalArgumentException("No JSON block found in LLM response");
+            throw new IllegalArgumentException("No JSON block found in Gemini response");
         }
 
         int bracesCount = 0;
         for (int i = start; i < text.length(); i++) {
             char c = text.charAt(i);
-            if (c == '{') {
-                bracesCount++;
-            } else if (c == '}') {
+            if (c == '{') bracesCount++;
+            else if (c == '}') {
                 bracesCount--;
                 if (bracesCount == 0) {
-                    // Trả về substring từ dấu '{' đầu đến dấu '}' cân bằng cuối
                     return text.substring(start, i + 1);
                 }
             }
         }
-
-        throw new IllegalArgumentException("No balanced JSON block found in LLM response");
+        throw new IllegalArgumentException("No balanced JSON block found in Gemini response");
     }
 
-    static class ChatRequest {
-        public String model = "mistralai/mistral-small-3.1-24b-instruct:free";
-        public Message[] messages;
+    // Payload định dạng đúng với Gemini
+    static class GeminiRequest {
+        public Content[] contents;
 
-        public ChatRequest(String prompt) {
-            this.messages = new Message[]{new Message("user", prompt)};
-        }
-    }
-
-    static class Message {
-        public String role;
-        public Content[] content;
-
-        public Message(String role, String prompt) {
-            this.role = role;
-            this.content = new Content[]{new Content("text", prompt)};
+        public GeminiRequest(String prompt) {
+            this.contents = new Content[]{
+                    new Content(new Part(prompt))
+            };
         }
     }
 
     static class Content {
-        public String type;
-        public String text;
+        public Part[] parts;
 
-        public Content(String type, String text) {
-            this.type = type;
-            this.text = text;
+        public Content(Part part) {
+            this.parts = new Part[]{part};
         }
     }
 
+    static class Part {
+        public String text;
+
+        public Part(String text) {
+            this.text = text;
+        }
+    }
 }

@@ -23,7 +23,7 @@ public class CrawlerManager {
     private ApplicationContext context;
 
     private final List<Crawler> crawlers = new ArrayList<>();
-    private static final int NUM_THREADS = 3;
+    private static final int NUM_THREADS = 1;
 
     @PostConstruct
     public void startCrawlers() {

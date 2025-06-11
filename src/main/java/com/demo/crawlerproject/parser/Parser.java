@@ -1,6 +1,7 @@
 package com.demo.crawlerproject.parser;
 
 import com.demo.crawlerproject.config.SelectorConfig;
+import com.demo.crawlerproject.monitor.Monitor;
 import com.demo.crawlerproject.service.LlmService;
 import com.demo.crawlerproject.service.RedisService;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,9 @@ public class Parser {
 
     @Autowired
     private LlmService llmService;
+
+    @Autowired
+    private Monitor monitor;
 
     public ParseData parse(String html, String url) throws Exception {
         try {
@@ -68,6 +72,7 @@ public class Parser {
                 }
                 return article;
             } else {
+                monitor.incrementPassed();
                 throw new Exception("This url has no article: " + url);
             }
         } catch (Exception e) {
@@ -78,7 +83,7 @@ public class Parser {
 
     private String cleanHtmlForLlm(Document doc) {
         Element body = doc.body();
-        body.select("script, style, noscript, iframe, header, footer, nav, aside").remove();
+        body.select("script, style, noscript, iframe, footer, nav, aside, img").remove();
         return body.html();
     }
 
@@ -91,25 +96,37 @@ public class Parser {
 
     private ParseData parseDoc(Document doc, String url, SelectorConfig config) {
         ParseData article = new ParseData();
-        Element titleElement = doc.selectFirst(config.getTitle());
-        if (titleElement != null) {
-            article.setTitle(titleElement.text());
+
+        // Kiểm tra title selector
+        if (config.getTitle() != null && !config.getTitle().isEmpty()) {
+            Element titleElement = doc.selectFirst(config.getTitle());
+            if (titleElement != null) {
+                article.setTitle(titleElement.text());
+            }
         }
 
-        Element timeElement = doc.selectFirst(config.getPublishTime());
-        if (timeElement != null) {
-            article.setPublishTime(timeElement.text());
+        // Kiểm tra time selector
+        if (config.getPublishTime() != null && !config.getPublishTime().isEmpty()) {
+            Element timeElement = doc.selectFirst(config.getPublishTime());
+            if (timeElement != null) {
+                article.setPublishTime(timeElement.text());
+            }
         }
 
-        Elements paragraphs = doc.select(config.getContent());
-        StringBuilder contentBuilder = new StringBuilder();
-        for (Element p : paragraphs) {
-            contentBuilder.append(p.text()).append("\n");
+        // Kiểm tra content selector
+        if (config.getContent() != null && !config.getContent().isEmpty()) {
+            Elements paragraphs = doc.select(config.getContent());
+            StringBuilder contentBuilder = new StringBuilder();
+            for (Element p : paragraphs) {
+                contentBuilder.append(p.text()).append("\n");
+            }
+            article.setContent(contentBuilder.toString().trim());
         }
-        article.setContent(contentBuilder.toString().trim());
+
         article.setUrl(url);
         return article;
     }
+
 
     private Object getLock(String domain) {
         return lockMap.computeIfAbsent(domain, k -> new Object());

@@ -22,6 +22,9 @@ public class Monitor {
     private Counter crawled;
 
     @Getter
+    private Counter passed;
+
+    @Getter
     private double processing;
 
     @Getter
@@ -33,6 +36,9 @@ public class Monitor {
         task = redisService.getNumberOfTaskUrl();
 
         crawled = Counter.builder("crawler.crawled")
+                .register(meterRegistry);
+
+        passed = Counter.builder("crawler.passed")
                 .register(meterRegistry);
 
         long savedCrawledCount = redisService.getNumberOfCrawledUrl();
@@ -51,6 +57,12 @@ public class Monitor {
     public void incrementCrawled() {
         crawled.increment();
     }
+
+    // Tăng số bài đã pass
+    public void incrementPassed() {
+        passed.increment();
+    }
+
 
     // Tăng processing
     public void incrementProcessing() {
